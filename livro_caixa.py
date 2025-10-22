@@ -207,6 +207,79 @@ def adicionar_conta_plano(tipo, conta):
     finally:
         conn.close()
 
+# Função para exportar dados sem dependências externas
+def exportar_para_excel():
+    """Exporta dados para Excel sem usar xlsxwriter"""
+    try:
+        # Criar um arquivo Excel em memória
+        output = io.BytesIO()
+        
+        # Usar openpyxl como engine (já vem com pandas)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            # Aba de informações
+            info_df = pd.DataFrame({
+                'Livro Caixa - CONSTITUCIONALISTAS-929': [
+                    f'Exportado em: {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}',
+                    'Sistema com Banco de Dados SQLite',
+                    'Desenvolvido por Silmar Tolotto'
+                ]
+            })
+            info_df.to_excel(writer, sheet_name='Informações', index=False)
+            
+            # Aba de plano de contas
+            plano_contas = get_plano_contas()
+            plano_contas_lista = []
+            for tipo, contas in plano_contas.items():
+                for conta in contas:
+                    plano_contas_lista.append({'Tipo': tipo, 'Conta': conta})
+            plano_contas_df = pd.DataFrame(plano_contas_lista)
+            plano_contas_df.to_excel(writer, sheet_name='Plano de Contas', index=False)
+            
+            # Abas para cada mês
+            meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+            
+            for mes in meses:
+                df_mes = get_lancamentos_mes(mes)
+                if not df_mes.empty:
+                    # Selecionar apenas as colunas necessárias
+                    colunas_exportar = []
+                    if 'DATA' in df_mes.columns:
+                        colunas_exportar.append('DATA')
+                    if 'HISTORICO' in df_mes.columns:
+                        colunas_exportar.append('HISTORICO')
+                    if 'COMPLEMENTO' in df_mes.columns:
+                        colunas_exportar.append('COMPLEMENTO')
+                    if 'ENTRADA' in df_mes.columns:
+                        colunas_exportar.append('ENTRADA')
+                    if 'SAIDA' in df_mes.columns:
+                        colunas_exportar.append('SAIDA')
+                    if 'SALDO' in df_mes.columns:
+                        colunas_exportar.append('SALDO')
+                    
+                    if colunas_exportar:
+                        df_export = df_mes[colunas_exportar].copy()
+                        
+                        # Renomear colunas para melhor legibilidade
+                        mapeamento_colunas = {
+                            'DATA': 'Data',
+                            'HISTORICO': 'Histórico',
+                            'COMPLEMENTO': 'Complemento',
+                            'ENTRADA': 'Entrada (R$)',
+                            'SAIDA': 'Saída (R$)',
+                            'SALDO': 'Saldo (R$)'
+                        }
+                        
+                        df_export.columns = [mapeamento_colunas.get(col, col) for col in df_export.columns]
+                        df_export.to_excel(writer, sheet_name=mes, index=False)
+        
+        output.seek(0)
+        return output
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao exportar para Excel: {e}")
+        return None
+
 # Inicializar banco de dados
 init_db()
 
@@ -283,15 +356,15 @@ elif pagina == "Plano de Contas":
     
     col1, col2 = st.columns(2)
     
-    #with col1:
-        #st.subheader("💰 Receitas")
-        #for conta in plano_contas['RECEITAS']:
-            #st.write(f"• {conta}")
+    with col1:
+        st.subheader("💰 Receitas")
+        for conta in plano_contas['RECEITAS']:
+            st.write(f"• {conta}")
     
-    #with col2:
-        #st.subheader("💸 Despesas")
-        #for conta in plano_contas['DESPESAS']:
-            #st.write(f"• {conta}")
+    with col2:
+        st.subheader("💸 Despesas")
+        for conta in plano_contas['DESPESAS']:
+            st.write(f"• {conta}")
     
     st.markdown("---")
     
@@ -509,62 +582,18 @@ elif pagina == "Exportar/Importar":
         
         if st.button("📥 Exportar para Excel", use_container_width=True):
             with st.spinner("Exportando dados para Excel..."):
-                # Criar um arquivo Excel com múltiplas abas
-                output = io.BytesIO()
+                output = exportar_para_excel()
                 
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    # Aba de ajuda
-                    ajuda_df = pd.DataFrame({
-                        'Informações': [
-                            'Livro Caixa - CONSTITUCIONALISTAS-929',
-                            'Exportado em: ' + datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
-                            'Sistema com Banco de Dados SQLite',
-                            'Desenvolvido por Silmar Tolotto'
-                        ]
-                    })
-                    ajuda_df.to_excel(writer, sheet_name='Ajuda', index=False)
-                    
-                    # Aba de plano de contas
-                    plano_contas = get_plano_contas()
-                    plano_contas_lista = []
-                    for tipo, contas in plano_contas.items():
-                        for conta in contas:
-                            plano_contas_lista.append({'Tipo': tipo, 'Conta': conta})
-                    plano_contas_df = pd.DataFrame(plano_contas_lista)
-                    plano_contas_df.to_excel(writer, sheet_name='Plano de Contas', index=False)
-                    
-                    # Abas para cada mês
-                    meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                            "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-                    for mes in meses:
-                        df_mes = get_lancamentos_mes(mes)
-                        if not df_mes.empty:
-                            # Mapear colunas para exportação
-                            colunas_mapeadas = {
-                                'DATA': 'Data',
-                                'HISTORICO': 'Histórico', 
-                                'COMPLEMENTO': 'Complemento',
-                                'ENTRADA': 'Entrada',
-                                'SAIDA': 'Saída',
-                                'SALDO': 'Saldo'
-                            }
-                            
-                            colunas_existentes = [col for col in colunas_mapeadas.keys() if col in df_mes.columns]
-                            
-                            if colunas_existentes:
-                                df_export = df_mes[colunas_existentes].copy()
-                                df_export.columns = [colunas_mapeadas[col] for col in colunas_existentes]
-                                df_export.to_excel(writer, sheet_name=mes, index=False)
-                
-                output.seek(0)
-                
-                st.download_button(
-                    label="💾 Baixar Arquivo Excel",
-                    data=output,
-                    file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                if output is not None:
+                    st.download_button(
+                        label="💾 Baixar Arquivo Excel",
+                        data=output,
+                        file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("❌ Falha ao exportar dados. Verifique se o openpyxl está instalado.")
     
     with col2:
         st.subheader("📊 Informações do Sistema")
