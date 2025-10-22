@@ -406,15 +406,15 @@ elif pagina == "Plano de Contas":
     
     col1, col2 = st.columns(2)
     
-    with col1:
-        st.subheader("💰 Receitas")
-        for conta in plano_contas['RECEITAS']:
-            st.write(f"• {conta}")
+    #with col1:
+        #st.subheader("💰 Receitas")
+        #for conta in plano_contas['RECEITAS']:
+            #st.write(f"• {conta}")
     
-    with col2:
-        st.subheader("💸 Despesas")
-        for conta in plano_contas['DESPESAS']:
-            st.write(f"• {conta}")
+    #with col2:
+        #st.subheader("💸 Despesas")
+        #for conta in plano_contas['DESPESAS']:
+            #st.write(f"• {conta}")
     
     st.markdown("---")
     
@@ -706,3 +706,4 @@ st.markdown(
     """.format(date=datetime.now().strftime('%d/%m/%Y %H:%M')),
     unsafe_allow_html=True
 )
+
