@@ -227,7 +227,6 @@ if pagina == "Ajuda":
     
     **✨ Funcionalidades:**
     - **Banco de Dados SQLite**: Todos os dados são salvos localmente
-    - **Sistema de Logo**: Suporte para imagem personalizada
     - **Persistência**: Dados mantidos entre execuções
     - **Relatórios**: Balanço financeiro com gráficos
     - **Exportação**: Backup dos dados em Excel
@@ -523,4 +522,5 @@ st.markdown(
     "**CONSTITUCIONALISTAS-929** - Livro Caixa | "
     "Desenvolvido por Silmar Tolotto em Python | "
     f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
 )
