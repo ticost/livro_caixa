@@ -262,7 +262,8 @@ def exportar_para_csv():
         # Criar um arquivo ZIP com todos os CSVs
         with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for nome_arquivo, df in dados_exportacao.items():
-                csv_data = df.to_csv(index=False, encoding='utf-8-sig')
+                # CORREÇÃO: usar ponto e vírgula como delimitador
+                csv_data = df.to_csv(index=False, sep=';', encoding='utf-8-sig')
                 zipf.writestr(nome_arquivo, csv_data)
         
         output.seek(0)
@@ -620,3 +621,4 @@ st.markdown(
     """.format(date=datetime.now().strftime('%d/%m/%Y %H:%M')),
     unsafe_allow_html=True
 )
+
