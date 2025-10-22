@@ -4,8 +4,8 @@ from datetime import datetime
 import io
 import sqlite3
 import base64
-from pathlib import Path
 import os
+import zipfile
 
 # Configuração da página para melhor responsividade
 st.set_page_config(
@@ -91,41 +91,37 @@ def init_db():
         )
     ''')
     
-    # Tabela para plano de contas
+    # Tabela SIMPLIFICADA para contas (sem separação Receitas/Despesas)
     c.execute('''
-        CREATE TABLE IF NOT EXISTS plano_contas (
+        CREATE TABLE IF NOT EXISTS contas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tipo TEXT NOT NULL,
-            conta TEXT NOT NULL,
+            nome TEXT NOT NULL UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
-    # Inserir plano de contas padrão se a tabela estiver vazia
-    c.execute('SELECT COUNT(*) FROM plano_contas')
+    # Inserir contas padrão se a tabela estiver vazia
+    c.execute('SELECT COUNT(*) FROM contas')
     if c.fetchone()[0] == 0:
         contas_padrao = [
-            ('RECEITAS', 'Rendimentos PF não Assalariado'),
-            ('RECEITAS', 'Rendimentos PJ não Assalariado'),
-            ('RECEITAS', 'Rendimentos PJ Assalariado'),
-            ('RECEITAS', 'Receitas de aluguéis'),
-            ('RECEITAS', 'Lucros na Venda de bens patrimoniais'),
-            ('RECEITAS', 'Rendas Extraordinarias'),
-            ('DESPESAS', 'Compras de mercadorias'),
-            ('DESPESAS', 'Fretes e Seguros sobre compras'),
-            ('DESPESAS', 'Agua e esgoto'),
-            ('DESPESAS', 'Energia Elétrica'),
-            ('DESPESAS', 'Telefones'),
-            ('DESPESAS', 'Provedor - Internet'),
-            ('DESPESAS', 'Material de Limpeza'),
-            ('DESPESAS', 'Material de Expediente'),
-            ('DESPESAS', 'Aluguel'),
-            ('DESPESAS', 'Salários'),
-            ('DESPESAS', 'INSS'),
-            ('DESPESAS', 'IRRF'),
-            ('DESPESAS', 'FGTS')
+            'Salários',
+            'Aluguel',
+            'Energia Elétrica',
+            'Água',
+            'Telefone',
+            'Internet',
+            'Material de Expediente',
+            'Transporte',
+            'Alimentação',
+            'Manutenção',
+            'Vendas',
+            'Serviços Prestados',
+            'Consultoria',
+            'Outras Receitas',
+            'Outras Despesas'
         ]
-        c.executemany('INSERT INTO plano_contas (tipo, conta) VALUES (?, ?)', contas_padrao)
+        for conta in contas_padrao:
+            c.execute('INSERT OR IGNORE INTO contas (nome) VALUES (?)', (conta,))
     
     conn.commit()
     conn.close()
@@ -175,39 +171,34 @@ def limpar_lancamentos_mes(mes):
     finally:
         conn.close()
 
-def get_plano_contas():
-    """Busca o plano de contas"""
+def get_contas():
+    """Busca todas as contas"""
     conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
     try:
-        df = pd.read_sql("SELECT tipo, conta FROM plano_contas ORDER BY tipo, conta", conn)
+        df = pd.read_sql("SELECT nome FROM contas ORDER BY nome", conn)
+        contas = df['nome'].tolist()
     except Exception as e:
-        st.error(f"Erro ao buscar plano de contas: {e}")
-        df = pd.DataFrame(columns=['tipo', 'conta'])
+        st.error(f"Erro ao buscar contas: {e}")
+        contas = []
     finally:
         conn.close()
-    
-    # Converter para o formato do dicionário
-    plano_contas = {'RECEITAS': [], 'DESPESAS': []}
-    for _, row in df.iterrows():
-        plano_contas[row['tipo']].append(row['conta'])
-    
-    return plano_contas
+    return contas
 
-def adicionar_conta_plano(tipo, conta):
-    """Adiciona uma nova conta ao plano de contas"""
+def adicionar_conta(nome_conta):
+    """Adiciona uma nova conta"""
     conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
     c = conn.cursor()
     try:
-        c.execute('INSERT INTO plano_contas (tipo, conta) VALUES (?, ?)', (tipo, conta))
+        c.execute('INSERT OR IGNORE INTO contas (nome) VALUES (?)', (nome_conta,))
         conn.commit()
-        st.success(f"✅ Conta '{conta}' adicionada com sucesso!")
+        st.success(f"✅ Conta '{nome_conta}' adicionada com sucesso!")
     except Exception as e:
         st.error(f"❌ Erro ao adicionar conta: {e}")
         conn.rollback()
     finally:
         conn.close()
 
-# Função para exportar dados em formato CSV (sem dependências externas)
+# Função para exportar dados em formato CSV
 def exportar_para_csv():
     """Exporta dados para formato CSV que pode ser aberto no Excel"""
     try:
@@ -224,13 +215,9 @@ def exportar_para_csv():
             'Desenvolvido_por': ['Silmar Tolotto']
         })
         
-        # Plano de contas
-        plano_contas = get_plano_contas()
-        plano_contas_lista = []
-        for tipo, contas in plano_contas.items():
-            for conta in contas:
-                plano_contas_lista.append({'Tipo': tipo, 'Conta': conta})
-        dados_exportacao['01_Plano_Contas.csv'] = pd.DataFrame(plano_contas_lista)
+        # Contas
+        contas = get_contas()
+        dados_exportacao['01_Contas.csv'] = pd.DataFrame({'Conta': contas})
         
         # Lançamentos por mês
         meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
@@ -273,10 +260,9 @@ def exportar_para_csv():
                     dados_exportacao[f'02_{mes}.csv'] = df_export
         
         # Criar um arquivo ZIP com todos os CSVs
-        import zipfile
         with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for nome_arquivo, df in dados_exportacao.items():
-                csv_data = df.to_csv(index=False, encoding='utf-8-sig')  # UTF-8 com BOM para Excel
+                csv_data = df.to_csv(index=False, encoding='utf-8-sig')
                 zipf.writestr(nome_arquivo, csv_data)
         
         output.seek(0)
@@ -284,50 +270,6 @@ def exportar_para_csv():
         
     except Exception as e:
         st.error(f"❌ Erro ao exportar dados: {e}")
-        return None
-
-# Função alternativa para exportar dados simples em CSV único
-def exportar_csv_simples():
-    """Exporta todos os dados em um único arquivo CSV"""
-    try:
-        output = io.BytesIO()
-        
-        # Coletar todos os dados
-        todos_dados = []
-        
-        meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-        
-        for mes in meses:
-            df_mes = get_lancamentos_mes(mes)
-            if not df_mes.empty:
-                for _, row in df_mes.iterrows():
-                    dados_linha = {
-                        'Mês': mes,
-                        'Data': row['DATA'] if 'DATA' in row else '',
-                        'Histórico': row['HISTORICO'] if 'HISTORICO' in row else '',
-                        'Complemento': row['COMPLEMENTO'] if 'COMPLEMENTO' in row else '',
-                        'Entrada_R$': row['ENTRADA'] if 'ENTRADA' in row else 0,
-                        'Saída_R$': row['SAIDA'] if 'SAIDA' in row else 0,
-                        'Saldo_R$': row['SALDO'] if 'SALDO' in row else 0
-                    }
-                    todos_dados.append(dados_linha)
-        
-        df_export = pd.DataFrame(todos_dados)
-        
-        # Formatar datas
-        if not df_export.empty and 'Data' in df_export.columns:
-            df_export['Data'] = pd.to_datetime(df_export['Data']).dt.strftime('%d/%m/%Y')
-        
-        # Converter para CSV
-        csv_data = df_export.to_csv(index=False, encoding='utf-8-sig')
-        output.write(csv_data.encode('utf-8-sig'))
-        output.seek(0)
-        
-        return output
-        
-    except Exception as e:
-        st.error(f"❌ Erro ao exportar CSV simples: {e}")
         return None
 
 # Inicializar banco de dados
@@ -346,7 +288,7 @@ with st.sidebar:
     
     pagina = st.radio(
         "**Navegação:**",
-        ["Ajuda", "Plano de Contas", "Lançamentos", "Balanço Financeiro", "Exportar/Importar"],
+        ["Ajuda", "Contas", "Lançamentos", "Balanço Financeiro", "Exportar Dados"],
         label_visibility="collapsed"
     )
 
@@ -358,26 +300,26 @@ if pagina == "Ajuda":
     
     with col1:
         st.markdown("""
-        ### Versão 2.0 com Banco de Dados
+        ### Sistema Simplificado de Livro Caixa
         
-        Este programa de livro Caixa servirá para lançar todas as receitas e despesas ocorridas na empresa
-        durante todo o ano e diariamente se você preferir.
+        Este programa serve para lançar todas as receitas e despesas da empresa
+        de forma simples e organizada.
         
         **✨ Funcionalidades:**
-        - ✅ **Banco de Dados SQLite**: Todos os dados são salvos localmente
-        - ✅ **Persistência**: Dados mantidos entre execuções
+        - ✅ **Banco de Dados SQLite**: Dados salvos localmente
+        - ✅ **Contas Personalizáveis**: Adicione suas próprias contas
         - ✅ **Relatórios**: Balanço financeiro com gráficos
-        - ✅ **Exportação**: Backup dos dados em CSV/Excel
+        - ✅ **Exportação**: Backup dos dados em CSV
         
-        **📝 Nota:** Não se esqueça de escrever o saldo do caixa anterior em saldo inicial em janeiro!
+        **📝 Nota:** Não se esqueça do saldo inicial em janeiro!
         """)
         
         st.markdown("---")
         st.subheader("🎯 Como Usar:")
         
         st.markdown("""
-        1. **📥 Lançamentos**: Adicione entradas e saídas por mês
-        2. **📊 Plano de Contas**: Gerencie suas categorias
+        1. **📝 Contas**: Configure suas contas personalizadas
+        2. **📥 Lançamentos**: Adicione entradas e saídas por mês
         3. **📈 Balanço**: Veja relatórios e gráficos
         4. **💾 Exportar**: Faça backup dos dados
         """)
@@ -389,50 +331,37 @@ if pagina == "Ajuda":
         **💰 Movimentações:**
         - **Deposito em banco** → **Saída** do caixa
         - **Retirada do banco** → **Entrada** do caixa
-        - **Pagamento de contas** → **Saída** do caixa
-        - **Recebimento de valores** → **Entrada** do caixa
-        
-        **⚡ Atalhos:**
-        - Use `Tab` para navegar entre campos
-        - `Enter` para confirmar lançamentos
-        - Exporte regularmente para backup
+        - **Pagamento** → **Saída** do caixa
+        - **Recebimento** → **Entrada** do caixa
         """)
 
-elif pagina == "Plano de Contas":
-    st.title("📊 Plano de Contas")
+# Página: Contas (SIMPLIFICADA)
+elif pagina == "Contas":
+    st.title("📝 Contas")
     
-    # Buscar plano de contas do banco
-    plano_contas = get_plano_contas()
+    # Buscar contas do banco
+    contas = get_contas()
     
-    col1, col2 = st.columns(2)
+    # Lista de contas existentes
+    #st.subheader("📋 Contas Cadastradas")
+    #if contas:
+        #for i, conta in enumerate(contas, 1):
+            #st.write(f"{i}. {conta}")
+    #else:
+        #st.info("📭 Nenhuma conta cadastrada ainda.")
     
-    #with col1:
-        #st.subheader("💰 Receitas")
-        #for conta in plano_contas['RECEITAS']:
-            #st.write(f"• {conta}")
-    
-    #with col2:
-        #st.subheader("💸 Despesas")
-        #for conta in plano_contas['DESPESAS']:
-            #st.write(f"• {conta}")
-    
-    st.markdown("---")
+    #st.markdown("---")
     
     # Adicionar nova conta
     st.subheader("➕ Adicionar Nova Conta")
     
-    col3, col4 = st.columns([1, 2])
-    
-    with col3:
-        tipo_conta = st.selectbox("**Tipo de Conta**", ["RECEITAS", "DESPESAS"])
-    
-    with col4:
-        nova_conta = st.text_input("**Nome da Nova Conta**", placeholder="Digite o nome da nova conta...")
+    nova_conta = st.text_input("**Nome da Nova Conta**", placeholder="Ex: Salários, Aluguel, Vendas...")
     
     if st.button("✅ Adicionar Conta", use_container_width=True) and nova_conta:
-        adicionar_conta_plano(tipo_conta, nova_conta)
+        adicionar_conta(nova_conta)
         st.rerun()
 
+# Página: Lançamentos
 elif pagina == "Lançamentos":
     st.title("📥 Lançamentos do Caixa")
     
@@ -550,17 +479,18 @@ elif pagina == "Lançamentos":
             with col8:
                 st.metric("🏦 Saldo Atual", f"R$ {saldo_atual:,.2f}")
         else:
-            st.warning("⚠️ Estrutura de dados incompatível. Mostrando dados brutos:")
+            st.warning("⚠️ Estrutura de dados incompatível.")
             st.dataframe(df_mes, use_container_width=True)
     else:
         st.info(f"📭 Nenhum lançamento encontrado para {mes_selecionado}")
     
     # Botão para limpar lançamentos do mês
-    if st.button(f"🗑️ Limpar Todos os Lançamentos de {mes_selecionado}", use_container_width=True, type="secondary"):
-        if st.checkbox("✅ Confirmar exclusão de todos os lançamentos deste mês"):
+    if st.button(f"🗑️ Limpar Lançamentos de {mes_selecionado}", use_container_width=True, type="secondary"):
+        if st.checkbox("✅ Confirmar exclusão"):
             limpar_lancamentos_mes(mes_selecionado)
             st.rerun()
 
+# Página: Balanço Financeiro
 elif pagina == "Balanço Financeiro":
     st.title("📈 Balanço Financeiro")
     
@@ -622,8 +552,9 @@ elif pagina == "Balanço Financeiro":
             df_grafico = pd.DataFrame(dados_mensais)
             st.bar_chart(df_grafico.set_index('Mês')[['Entradas', 'Saídas']], use_container_width=True)
 
-elif pagina == "Exportar/Importar":
-    st.title("💾 Exportar/Importar Dados")
+# Página: Exportar Dados
+elif pagina == "Exportar Dados":
+    st.title("💾 Exportar Dados")
     
     col1, col2 = st.columns(2)
     
@@ -632,8 +563,7 @@ elif pagina == "Exportar/Importar":
         
         st.info("💡 Os arquivos CSV podem ser abertos diretamente no Excel")
         
-        # Opção 1: Exportar como ZIP com múltiplos arquivos
-        if st.button("📦 Exportar como ZIP (Arquivos Separados)", use_container_width=True):
+        if st.button("📦 Exportar Todos os Dados", use_container_width=True):
             with st.spinner("Gerando arquivo ZIP..."):
                 output = exportar_para_csv()
                 
@@ -646,23 +576,8 @@ elif pagina == "Exportar/Importar":
                         use_container_width=True
                     )
                     st.success("✅ Arquivo ZIP gerado com sucesso!")
-                    st.info("📁 O ZIP contém arquivos separados por mês e plano de contas")
-        
-        # Opção 2: Exportar como CSV único
-        if st.button("📄 Exportar como CSV Único", use_container_width=True):
-            with st.spinner("Gerando arquivo CSV..."):
-                output = exportar_csv_simples()
-                
-                if output is not None:
-                    st.download_button(
-                        label="💾 Baixar Arquivo CSV",
-                        data=output,
-                        file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                    st.success("✅ Arquivo CSV gerado com sucesso!")
-                    st.info("💡 Este arquivo pode ser aberto diretamente no Excel")
+                else:
+                    st.error("❌ Erro ao gerar arquivo de exportação")
     
     with col2:
         st.subheader("📊 Informações do Sistema")
@@ -672,7 +587,7 @@ elif pagina == "Exportar/Importar":
         
         try:
             total_lancamentos = pd.read_sql("SELECT COUNT(*) as total FROM lancamentos", conn).iloc[0]['total']
-            total_contas = pd.read_sql("SELECT COUNT(*) as total FROM plano_contas", conn).iloc[0]['total']
+            total_contas = pd.read_sql("SELECT COUNT(*) as total FROM contas", conn).iloc[0]['total']
             meses_com_dados = pd.read_sql("SELECT COUNT(DISTINCT mes) as total FROM lancamentos", conn).iloc[0]['total']
         except:
             total_lancamentos = 0
@@ -691,19 +606,17 @@ elif pagina == "Exportar/Importar":
         - **Arquivo:** `livro_caixa.db`
         - **Dados:** Persistidos localmente
         - **Exportação:** CSV compatível com Excel
-        - **Versão:** 2.0 Final
         """)
 
-# Rodapé atualizado
+# Rodapé
 st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; font-size: 0.9rem;'>
         <strong>CONSTITUCIONALISTAS-929</strong> - Livro Caixa | 
-        Desenvolvido por Silmar Tolotto em Python | 
-        Última atualização: {date}
+        Desenvolvido por Silmar Tolotto | 
+        {date}
     </div>
     """.format(date=datetime.now().strftime('%d/%m/%Y %H:%M')),
     unsafe_allow_html=True
 )
-
