@@ -157,6 +157,102 @@ def salvar_lancamento(mes, data, historico, complemento, entrada, saida, saldo):
     finally:
         conn.close()
 
+def atualizar_lancamento(lancamento_id, mes, data, historico, complemento, entrada, saida):
+    """Atualiza um lançamento existente no banco"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        # Buscar todos os lançamentos do mês para recalcular saldos
+        c.execute('SELECT * FROM lancamentos WHERE mes = ? ORDER BY data, id', (mes,))
+        lancamentos = c.fetchall()
+        
+        # Encontrar o índice do lançamento sendo editado
+        index_editado = None
+        for i, lanc in enumerate(lancamentos):
+            if lanc[0] == lancamento_id:
+                index_editado = i
+                break
+        
+        if index_editado is not None:
+            # Atualizar o lançamento específico
+            c.execute('''
+                UPDATE lancamentos 
+                SET data = ?, historico = ?, complemento = ?, entrada = ?, saida = ?
+                WHERE id = ?
+            ''', (data, historico, complemento, entrada, saida, lancamento_id))
+            
+            # Recalcular todos os saldos a partir do lançamento editado
+            for i in range(index_editado, len(lancamentos)):
+                if i == index_editado:
+                    # Para o lançamento editado, usar saldo anterior
+                    if i == 0:
+                        saldo = entrada - saida
+                    else:
+                        saldo_anterior = lancamentos[i-1][7]  # SALDO do lançamento anterior
+                        saldo = saldo_anterior + entrada - saida
+                else:
+                    # Para lançamentos seguintes, recalcular baseado no anterior
+                    entrada_atual = lancamentos[i][5] if i != index_editado else entrada
+                    saida_atual = lancamentos[i][6] if i != index_editado else saida
+                    saldo_anterior = lancamentos[i-1][7] if i > 0 else 0
+                    saldo = saldo_anterior + entrada_atual - saida_atual
+                
+                # Atualizar saldo no banco
+                lanc_id = lancamentos[i][0] if i != index_editado else lancamento_id
+                c.execute('UPDATE lancamentos SET saldo = ? WHERE id = ?', (saldo, lanc_id))
+            
+            conn.commit()
+            return True
+        else:
+            st.error("❌ Lançamento não encontrado")
+            return False
+            
+    except Exception as e:
+        st.error(f"❌ Erro ao atualizar lançamento: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def excluir_lancamento(lancamento_id, mes):
+    """Exclui um lançamento específico"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        # Buscar o lançamento a ser excluído
+        c.execute('SELECT * FROM lancamentos WHERE id = ?', (lancamento_id,))
+        lancamento = c.fetchone()
+        
+        if lancamento:
+            # Excluir o lançamento
+            c.execute('DELETE FROM lancamentos WHERE id = ?', (lancamento_id,))
+            
+            # Recalcular saldos dos lançamentos seguintes
+            c.execute('SELECT * FROM lancamentos WHERE mes = ? ORDER BY data, id', (mes,))
+            lancamentos_restantes = c.fetchall()
+            
+            for i, lanc in enumerate(lancamentos_restantes):
+                if i == 0:
+                    saldo = lanc[5] - lanc[6]  # entrada - saida
+                else:
+                    saldo_anterior = lancamentos_restantes[i-1][7]
+                    saldo = saldo_anterior + lanc[5] - lanc[6]
+                
+                c.execute('UPDATE lancamentos SET saldo = ? WHERE id = ?', (saldo, lanc[0]))
+            
+            conn.commit()
+            return True
+        else:
+            st.error("❌ Lançamento não encontrado")
+            return False
+            
+    except Exception as e:
+        st.error(f"❌ Erro ao excluir lançamento: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
 def limpar_lancamentos_mes(mes):
     """Remove todos os lançamentos de um mês"""
     conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
@@ -309,6 +405,7 @@ if pagina == "Ajuda":
         **✨ Funcionalidades:**
         - ✅ **Banco de Dados SQLite**: Dados salvos localmente
         - ✅ **Contas Personalizáveis**: Adicione suas próprias contas
+        - ✅ **Edição de Lançamentos**: Edite ou exclua lançamentos existentes
         - ✅ **Relatórios**: Balanço financeiro com gráficos
         - ✅ **Exportação**: Backup dos dados em CSV
         
@@ -321,8 +418,9 @@ if pagina == "Ajuda":
         st.markdown("""
         1. **📝 Contas**: Configure suas contas personalizadas
         2. **📥 Lançamentos**: Adicione entradas e saídas por mês
-        3. **📈 Balanço**: Veja relatórios e gráficos
-        4. **💾 Exportar**: Faça backup dos dados
+        3. **✏️ Editar**: Modifique ou exclua lançamentos existentes
+        4. **📈 Balanço**: Veja relatórios e gráficos
+        5. **💾 Exportar**: Faça backup dos dados
         """)
     
     with col2:
@@ -344,14 +442,14 @@ elif pagina == "Contas":
     contas = get_contas()
     
     # Lista de contas existentes
-    #st.subheader("📋 Contas Cadastradas")
-    #if contas:
-        #for i, conta in enumerate(contas, 1):
-            #st.write(f"{i}. {conta}")
-    #else:
-        #st.info("📭 Nenhuma conta cadastrada ainda.")
+    st.subheader("📋 Contas Cadastradas")
+    if contas:
+        for i, conta in enumerate(contas, 1):
+            st.write(f"{i}. {conta}")
+    else:
+        st.info("📭 Nenhuma conta cadastrada ainda.")
     
-    #st.markdown("---")
+    st.markdown("---")
     
     # Adicionar nova conta
     st.subheader("➕ Adicionar Nova Conta")
@@ -424,12 +522,13 @@ elif pagina == "Lançamentos":
             salvar_lancamento(mes_selecionado, data, historico, complemento, entrada, saida, saldo)
             st.rerun()
     
-    # Exibir lançamentos do mês
+    # Exibir lançamentos do mês com opção de edição
     st.subheader(f"📋 Lançamentos - {mes_selecionado}")
     
     if not df_mes.empty:
         # Mapear colunas do banco para os nomes exibidos
         colunas_mapeadas = {
+            'ID': 'ID',
             'DATA': 'DATA',
             'HISTORICO': 'HISTÓRICO', 
             'COMPLEMENTO': 'COMPLEMENTO',
@@ -447,23 +546,99 @@ elif pagina == "Lançamentos":
             # Renomear colunas para exibição
             df_exibir.columns = [colunas_mapeadas[col] for col in colunas_existentes]
             
-            # Formatar colunas
-            if 'DATA' in df_exibir.columns:
-                df_exibir['DATA'] = pd.to_datetime(df_exibir['DATA']).dt.strftime('%d/%m/%Y')
-            if 'ENTRADA' in df_exibir.columns:
-                df_exibir['ENTRADA'] = df_exibir['ENTRADA'].apply(lambda x: f"R$ {x:,.2f}" if x > 0 else "")
-            if 'SAÍDA' in df_exibir.columns:
-                df_exibir['SAÍDA'] = df_exibir['SAÍDA'].apply(lambda x: f"R$ {x:,.2f}" if x > 0 else "")
-            if 'SALDO' in df_exibir.columns:
-                df_exibir['SALDO'] = df_exibir['SALDO'].apply(lambda x: f"R$ {x:,.2f}")
+            # Formatar colunas para exibição
+            df_exibir_display = df_exibir.copy()
+            if 'DATA' in df_exibir_display.columns:
+                df_exibir_display['DATA'] = pd.to_datetime(df_exibir_display['DATA']).dt.strftime('%d/%m/%Y')
+            if 'ENTRADA' in df_exibir_display.columns:
+                df_exibir_display['ENTRADA'] = df_exibir_display['ENTRADA'].apply(lambda x: f"R$ {x:,.2f}" if x > 0 else "")
+            if 'SAÍDA' in df_exibir_display.columns:
+                df_exibir_display['SAÍDA'] = df_exibir_display['SAÍDA'].apply(lambda x: f"R$ {x:,.2f}" if x > 0 else "")
+            if 'SALDO' in df_exibir_display.columns:
+                df_exibir_display['SALDO'] = df_exibir_display['SALDO'].apply(lambda x: f"R$ {x:,.2f}")
             
             # Exibir tabela responsiva
-            st.dataframe(df_exibir, use_container_width=True, hide_index=True)
+            st.dataframe(df_exibir_display, use_container_width=True, hide_index=True)
+            
+            # Seção de Edição de Lançamentos
+            st.subheader("✏️ Gerenciar Lançamentos")
+            
+            # Selecionar lançamento para editar
+            if 'ID' in df_exibir.columns:
+                lancamentos_opcoes = []
+                for idx, row in df_exibir.iterrows():
+                    valor = row['ENTRADA'] if row['ENTRADA'] > 0 else row['SAÍDA']
+                    descricao = f"{row['DATA']} - {row['HISTÓRICO']} - R$ {valor:,.2f}"
+                    lancamentos_opcoes.append((row['ID'], descricao))
+                
+                if lancamentos_opcoes:
+                    lancamento_selecionado = st.selectbox(
+                        "**Selecione o lançamento para editar/excluir:**",
+                        options=lancamentos_opcoes,
+                        format_func=lambda x: x[1]
+                    )
+                    
+                    if lancamento_selecionado:
+                        lancamento_id = lancamento_selecionado[0]
+                        lancamento_data = df_exibir[df_exibir['ID'] == lancamento_id].iloc[0]
+                        
+                        col_edit, col_del = st.columns([3, 1])
+                        
+                        with col_edit:
+                            # Formulário de edição
+                            with st.form("form_editar_lancamento"):
+                                st.write("**Editar Lançamento:**")
+                                col6, col7, col8 = st.columns([2, 2, 1])
+                                
+                                with col6:
+                                    data_editar = st.date_input("**Data**", 
+                                                              value=datetime.strptime(str(lancamento_data['DATA']), '%Y-%m-%d').date() 
+                                                              if isinstance(lancamento_data['DATA'], str) 
+                                                              else lancamento_data['DATA'].date())
+                                    historico_editar = st.text_input("**Histórico**", value=lancamento_data['HISTÓRICO'])
+                                
+                                with col7:
+                                    complemento_editar = st.text_input("**Complemento**", value=lancamento_data['COMPLEMENTO'] 
+                                                                      if pd.notna(lancamento_data['COMPLEMENTO']) else "")
+                                    
+                                    # Determinar tipo de movimento baseado nos valores
+                                    if lancamento_data['ENTRADA'] > 0:
+                                        tipo_movimento_editar = "Entrada"
+                                        entrada_editar = st.number_input("**Valor Entrada (R$)**", 
+                                                                        value=float(lancamento_data['ENTRADA']), 
+                                                                        min_value=0.0, step=0.01, format="%.2f")
+                                        saida_editar = 0.0
+                                    else:
+                                        tipo_movimento_editar = "Saída"
+                                        saida_editar = st.number_input("**Valor Saída (R$)**", 
+                                                                      value=float(lancamento_data['SAÍDA']), 
+                                                                      min_value=0.0, step=0.01, format="%.2f")
+                                        entrada_editar = 0.0
+                                
+                                with col8:
+                                    st.write("")  # Espaçamento
+                                    st.write("")  # Espaçamento
+                                    submitted_editar = st.form_submit_button("💾 Atualizar", use_container_width=True)
+                                
+                                if submitted_editar and historico_editar:
+                                    # Atualizar lançamento no banco
+                                    if atualizar_lancamento(lancamento_id, mes_selecionado, data_editar, historico_editar, 
+                                                          complemento_editar, entrada_editar, saida_editar):
+                                        st.success("✅ Lançamento atualizado com sucesso!")
+                                        st.rerun()
+                        
+                        with col_del:
+                            st.write("**Excluir:**")
+                            if st.button("🗑️ Excluir", use_container_width=True, type="secondary"):
+                                if st.checkbox("✅ Confirmar exclusão"):
+                                    if excluir_lancamento(lancamento_id, mes_selecionado):
+                                        st.success("✅ Lançamento excluído com sucesso!")
+                                        st.rerun()
             
             # Estatísticas do mês
             st.subheader("📊 Estatísticas do Mês")
             
-            col6, col7, col8 = st.columns(3)
+            col9, col10, col11 = st.columns(3)
             
             total_entradas = df_mes['ENTRADA'].sum() if 'ENTRADA' in df_mes.columns else 0.0
             total_saidas = df_mes['SAIDA'].sum() if 'SAIDA' in df_mes.columns else 0.0
@@ -473,11 +648,11 @@ elif pagina == "Lançamentos":
             else:
                 saldo_atual = 0.0
             
-            with col6:
+            with col9:
                 st.metric("💰 Total de Entradas", f"R$ {total_entradas:,.2f}")
-            with col7:
+            with col10:
                 st.metric("💸 Total de Saídas", f"R$ {total_saidas:,.2f}")
-            with col8:
+            with col11:
                 st.metric("🏦 Saldo Atual", f"R$ {saldo_atual:,.2f}")
         else:
             st.warning("⚠️ Estrutura de dados incompatível.")
@@ -486,8 +661,8 @@ elif pagina == "Lançamentos":
         st.info(f"📭 Nenhum lançamento encontrado para {mes_selecionado}")
     
     # Botão para limpar lançamentos do mês
-    if st.button(f"🗑️ Limpar Lançamentos de {mes_selecionado}", use_container_width=True, type="secondary"):
-        if st.checkbox("✅ Confirmar exclusão"):
+    if st.button(f"🗑️ Limpar TODOS os Lançamentos de {mes_selecionado}", use_container_width=True, type="secondary"):
+        if st.checkbox("✅ Confirmar exclusão de TODOS os lançamentos"):
             limpar_lancamentos_mes(mes_selecionado)
             st.rerun()
 
@@ -621,4 +796,3 @@ st.markdown(
     """.format(date=datetime.now().strftime('%d/%m/%Y %H:%M')),
     unsafe_allow_html=True
 )
-
