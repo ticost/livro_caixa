@@ -207,77 +207,127 @@ def adicionar_conta_plano(tipo, conta):
     finally:
         conn.close()
 
-# Função para exportar dados sem dependências externas
-def exportar_para_excel():
-    """Exporta dados para Excel sem usar xlsxwriter"""
+# Função para exportar dados em formato CSV (sem dependências externas)
+def exportar_para_csv():
+    """Exporta dados para formato CSV que pode ser aberto no Excel"""
     try:
-        # Criar um arquivo Excel em memória
+        # Criar um arquivo ZIP em memória com múltiplos CSVs
         output = io.BytesIO()
         
-        # Usar openpyxl como engine (já vem com pandas)
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Aba de informações
-            info_df = pd.DataFrame({
-                'Livro Caixa - CONSTITUCIONALISTAS-929': [
-                    f'Exportado em: {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}',
-                    'Sistema com Banco de Dados SQLite',
-                    'Desenvolvido por Silmar Tolotto'
-                ]
-            })
-            info_df.to_excel(writer, sheet_name='Informações', index=False)
-            
-            # Aba de plano de contas
-            plano_contas = get_plano_contas()
-            plano_contas_lista = []
-            for tipo, contas in plano_contas.items():
-                for conta in contas:
-                    plano_contas_lista.append({'Tipo': tipo, 'Conta': conta})
-            plano_contas_df = pd.DataFrame(plano_contas_lista)
-            plano_contas_df.to_excel(writer, sheet_name='Plano de Contas', index=False)
-            
-            # Abas para cada mês
-            meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
-                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-            
-            for mes in meses:
-                df_mes = get_lancamentos_mes(mes)
-                if not df_mes.empty:
-                    # Selecionar apenas as colunas necessárias
-                    colunas_exportar = []
-                    if 'DATA' in df_mes.columns:
-                        colunas_exportar.append('DATA')
-                    if 'HISTORICO' in df_mes.columns:
-                        colunas_exportar.append('HISTORICO')
-                    if 'COMPLEMENTO' in df_mes.columns:
-                        colunas_exportar.append('COMPLEMENTO')
-                    if 'ENTRADA' in df_mes.columns:
-                        colunas_exportar.append('ENTRADA')
-                    if 'SAIDA' in df_mes.columns:
-                        colunas_exportar.append('SAIDA')
-                    if 'SALDO' in df_mes.columns:
-                        colunas_exportar.append('SALDO')
+        # Criar estrutura de dados para exportação
+        dados_exportacao = {}
+        
+        # Informações do sistema
+        dados_exportacao['00_Informacoes.csv'] = pd.DataFrame({
+            'Sistema': ['Livro Caixa - CONSTITUCIONALISTAS-929'],
+            'Exportado_em': [datetime.now().strftime('%d/%m/%Y %H:%M:%S')],
+            'Desenvolvido_por': ['Silmar Tolotto']
+        })
+        
+        # Plano de contas
+        plano_contas = get_plano_contas()
+        plano_contas_lista = []
+        for tipo, contas in plano_contas.items():
+            for conta in contas:
+                plano_contas_lista.append({'Tipo': tipo, 'Conta': conta})
+        dados_exportacao['01_Plano_Contas.csv'] = pd.DataFrame(plano_contas_lista)
+        
+        # Lançamentos por mês
+        meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        
+        for mes in meses:
+            df_mes = get_lancamentos_mes(mes)
+            if not df_mes.empty:
+                # Selecionar e renomear colunas
+                colunas_exportar = []
+                mapeamento_colunas = {}
+                
+                if 'DATA' in df_mes.columns:
+                    colunas_exportar.append('DATA')
+                    mapeamento_colunas['DATA'] = 'Data'
+                if 'HISTORICO' in df_mes.columns:
+                    colunas_exportar.append('HISTORICO')
+                    mapeamento_colunas['HISTORICO'] = 'Histórico'
+                if 'COMPLEMENTO' in df_mes.columns:
+                    colunas_exportar.append('COMPLEMENTO')
+                    mapeamento_colunas['COMPLEMENTO'] = 'Complemento'
+                if 'ENTRADA' in df_mes.columns:
+                    colunas_exportar.append('ENTRADA')
+                    mapeamento_colunas['ENTRADA'] = 'Entrada_R$'
+                if 'SAIDA' in df_mes.columns:
+                    colunas_exportar.append('SAIDA')
+                    mapeamento_colunas['SAIDA'] = 'Saída_R$'
+                if 'SALDO' in df_mes.columns:
+                    colunas_exportar.append('SALDO')
+                    mapeamento_colunas['SALDO'] = 'Saldo_R$'
+                
+                if colunas_exportar:
+                    df_export = df_mes[colunas_exportar].copy()
+                    df_export.columns = [mapeamento_colunas[col] for col in colunas_exportar]
                     
-                    if colunas_exportar:
-                        df_export = df_mes[colunas_exportar].copy()
-                        
-                        # Renomear colunas para melhor legibilidade
-                        mapeamento_colunas = {
-                            'DATA': 'Data',
-                            'HISTORICO': 'Histórico',
-                            'COMPLEMENTO': 'Complemento',
-                            'ENTRADA': 'Entrada (R$)',
-                            'SAIDA': 'Saída (R$)',
-                            'SALDO': 'Saldo (R$)'
-                        }
-                        
-                        df_export.columns = [mapeamento_colunas.get(col, col) for col in df_export.columns]
-                        df_export.to_excel(writer, sheet_name=mes, index=False)
+                    # Formatar datas
+                    if 'Data' in df_export.columns:
+                        df_export['Data'] = pd.to_datetime(df_export['Data']).dt.strftime('%d/%m/%Y')
+                    
+                    dados_exportacao[f'02_{mes}.csv'] = df_export
+        
+        # Criar um arquivo ZIP com todos os CSVs
+        import zipfile
+        with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for nome_arquivo, df in dados_exportacao.items():
+                csv_data = df.to_csv(index=False, encoding='utf-8-sig')  # UTF-8 com BOM para Excel
+                zipf.writestr(nome_arquivo, csv_data)
         
         output.seek(0)
         return output
         
     except Exception as e:
-        st.error(f"❌ Erro ao exportar para Excel: {e}")
+        st.error(f"❌ Erro ao exportar dados: {e}")
+        return None
+
+# Função alternativa para exportar dados simples em CSV único
+def exportar_csv_simples():
+    """Exporta todos os dados em um único arquivo CSV"""
+    try:
+        output = io.BytesIO()
+        
+        # Coletar todos os dados
+        todos_dados = []
+        
+        meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        
+        for mes in meses:
+            df_mes = get_lancamentos_mes(mes)
+            if not df_mes.empty:
+                for _, row in df_mes.iterrows():
+                    dados_linha = {
+                        'Mês': mes,
+                        'Data': row['DATA'] if 'DATA' in row else '',
+                        'Histórico': row['HISTORICO'] if 'HISTORICO' in row else '',
+                        'Complemento': row['COMPLEMENTO'] if 'COMPLEMENTO' in row else '',
+                        'Entrada_R$': row['ENTRADA'] if 'ENTRADA' in row else 0,
+                        'Saída_R$': row['SAIDA'] if 'SAIDA' in row else 0,
+                        'Saldo_R$': row['SALDO'] if 'SALDO' in row else 0
+                    }
+                    todos_dados.append(dados_linha)
+        
+        df_export = pd.DataFrame(todos_dados)
+        
+        # Formatar datas
+        if not df_export.empty and 'Data' in df_export.columns:
+            df_export['Data'] = pd.to_datetime(df_export['Data']).dt.strftime('%d/%m/%Y')
+        
+        # Converter para CSV
+        csv_data = df_export.to_csv(index=False, encoding='utf-8-sig')
+        output.write(csv_data.encode('utf-8-sig'))
+        output.seek(0)
+        
+        return output
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao exportar CSV simples: {e}")
         return None
 
 # Inicializar banco de dados
@@ -317,7 +367,7 @@ if pagina == "Ajuda":
         - ✅ **Banco de Dados SQLite**: Todos os dados são salvos localmente
         - ✅ **Persistência**: Dados mantidos entre execuções
         - ✅ **Relatórios**: Balanço financeiro com gráficos
-        - ✅ **Exportação**: Backup dos dados em Excel
+        - ✅ **Exportação**: Backup dos dados em CSV/Excel
         
         **📝 Nota:** Não se esqueça de escrever o saldo do caixa anterior em saldo inicial em janeiro!
         """)
@@ -580,20 +630,39 @@ elif pagina == "Exportar/Importar":
     with col1:
         st.subheader("📤 Exportar Dados")
         
-        if st.button("📥 Exportar para Excel", use_container_width=True):
-            with st.spinner("Exportando dados para Excel..."):
-                output = exportar_para_excel()
+        st.info("💡 Os arquivos CSV podem ser abertos diretamente no Excel")
+        
+        # Opção 1: Exportar como ZIP com múltiplos arquivos
+        if st.button("📦 Exportar como ZIP (Arquivos Separados)", use_container_width=True):
+            with st.spinner("Gerando arquivo ZIP..."):
+                output = exportar_para_csv()
                 
                 if output is not None:
                     st.download_button(
-                        label="💾 Baixar Arquivo Excel",
+                        label="💾 Baixar Arquivo ZIP",
                         data=output,
-                        file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        mime="application/zip",
                         use_container_width=True
                     )
-                else:
-                    st.error("❌ Falha ao exportar dados. Verifique se o openpyxl está instalado.")
+                    st.success("✅ Arquivo ZIP gerado com sucesso!")
+                    st.info("📁 O ZIP contém arquivos separados por mês e plano de contas")
+        
+        # Opção 2: Exportar como CSV único
+        if st.button("📄 Exportar como CSV Único", use_container_width=True):
+            with st.spinner("Gerando arquivo CSV..."):
+                output = exportar_csv_simples()
+                
+                if output is not None:
+                    st.download_button(
+                        label="💾 Baixar Arquivo CSV",
+                        data=output,
+                        file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    st.success("✅ Arquivo CSV gerado com sucesso!")
+                    st.info("💡 Este arquivo pode ser aberto diretamente no Excel")
     
     with col2:
         st.subheader("📊 Informações do Sistema")
@@ -621,7 +690,8 @@ elif pagina == "Exportar/Importar":
         - **Banco de Dados:** SQLite
         - **Arquivo:** `livro_caixa.db`
         - **Dados:** Persistidos localmente
-        - **Versão:** 2.0 Corrigida
+        - **Exportação:** CSV compatível com Excel
+        - **Versão:** 2.0 Final
         """)
 
 # Rodapé atualizado
