@@ -6,6 +6,7 @@ import sqlite3
 import base64
 import os
 import zipfile
+import hashlib
 
 # Configuração da página para melhor responsividade
 st.set_page_config(
@@ -32,6 +33,114 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Funções de autenticação
+def init_auth_db():
+    """Inicializa a tabela de usuários"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Inserir usuário padrão se não existir
+    c.execute('SELECT COUNT(*) FROM usuarios WHERE username = ?', ('admin',))
+    if c.fetchone()[0] == 0:
+        # Senha padrão: "admin123"
+        password_hash = hashlib.sha256('admin123'.encode()).hexdigest()
+        c.execute('INSERT INTO usuarios (username, password_hash) VALUES (?, ?)', 
+                 ('admin', password_hash))
+    
+    conn.commit()
+    conn.close()
+
+def verify_password(password, password_hash):
+    """Verifica se a senha está correta"""
+    return hashlib.sha256(password.encode()).hexdigest() == password_hash
+
+def login_user(username, password):
+    """Faz login do usuário"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    c.execute('SELECT password_hash FROM usuarios WHERE username = ?', (username,))
+    result = c.fetchone()
+    conn.close()
+    
+    if result and verify_password(password, result[0]):
+        st.session_state.logged_in = True
+        st.session_state.username = username
+        return True
+    return False
+
+def logout_user():
+    """Faz logout do usuário"""
+    st.session_state.logged_in = False
+    st.session_state.username = None
+
+def change_password(username, new_password):
+    """Altera a senha do usuário"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    password_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    c.execute('UPDATE usuarios SET password_hash = ? WHERE username = ?', 
+             (password_hash, username))
+    conn.commit()
+    conn.close()
+
+def create_user(username, password):
+    """Cria um novo usuário"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    try:
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        c.execute('INSERT INTO usuarios (username, password_hash) VALUES (?, ?)', 
+                 (username, password_hash))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Usuário já existe
+    except Exception as e:
+        return False
+    finally:
+        conn.close()
+
+def get_all_users():
+    """Busca todos os usuários (apenas para admin)"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    c.execute('SELECT username, created_at FROM usuarios ORDER BY created_at')
+    users = c.fetchall()
+    conn.close()
+    
+    return users
+
+def delete_user(username):
+    """Exclui um usuário (apenas para admin)"""
+    conn = sqlite3.connect('livro_caixa.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    try:
+        # Não permitir excluir o próprio usuário
+        if username == st.session_state.username:
+            return False, "Não é possível excluir seu próprio usuário!"
+        
+        c.execute('DELETE FROM usuarios WHERE username = ?', (username,))
+        conn.commit()
+        return True, "Usuário excluído com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao excluir usuário: {e}"
+    finally:
+        conn.close()
 
 # Função para carregar e exibir a imagem do logo
 def carregar_imagem_logo(caminho_imagem="Logo_Loja.png"):
@@ -369,10 +478,113 @@ def exportar_para_csv():
         st.error(f"❌ Erro ao exportar dados: {e}")
         return None
 
-# Inicializar banco de dados
-init_db()
+# Função para download CSV individual por mês
+def download_csv_mes(mes):
+    """Gera CSV individual para um mês específico"""
+    df_mes = get_lancamentos_mes(mes)
+    if not df_mes.empty:
+        # Selecionar colunas para exportação
+        colunas_exportar = ['DATA', 'HISTORICO', 'COMPLEMENTO', 'ENTRADA', 'SAIDA', 'SALDO']
+        colunas_existentes = [col for col in colunas_exportar if col in df_mes.columns]
+        
+        if colunas_existentes:
+            df_export = df_mes[colunas_existentes].copy()
+            
+            # Renomear colunas
+            mapeamento_colunas = {
+                'DATA': 'Data',
+                'HISTORICO': 'Histórico',
+                'COMPLEMENTO': 'Complemento',
+                'ENTRADA': 'Entrada_R$',
+                'SAIDA': 'Saída_R$',
+                'SALDO': 'Saldo_R$'
+            }
+            df_export.columns = [mapeamento_colunas[col] for col in colunas_existentes]
+            
+            # Formatar datas
+            if 'Data' in df_export.columns:
+                df_export['Data'] = pd.to_datetime(df_export['Data']).dt.strftime('%d/%m/%Y')
+            
+            # Converter para CSV com ponto e vírgula
+            csv_data = df_export.to_csv(index=False, sep=';', encoding='utf-8-sig')
+            return csv_data
+    return None
 
-# Sidebar com logo
+# Inicializar bancos de dados
+init_db()
+init_auth_db()
+
+# Verificar se o usuário está logado
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = None
+
+# Página de Login
+if not st.session_state.logged_in:
+    st.title("🔐 Login - Livro Caixa")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        # Usando markdown para exibir o emoji como texto
+        st.markdown("""
+        <div style="text-align: center; font-size: 80px; padding: 20px;">
+            🔒
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        with st.form("login_form"):
+            st.subheader("Acesso Restrito")
+            username = st.text_input("Usuário", placeholder="Digite seu usuário")
+            password = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+            
+            submitted = st.form_submit_button("🚪 Entrar", use_container_width=True)
+            
+            if submitted:
+                if username and password:
+                    if login_user(username, password):
+                        st.success(f"✅ Bem-vindo, {username}!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Usuário ou senha incorretos!")
+                else:
+                    st.warning("⚠️ Preencha todos os campos!")
+        
+        st.markdown("---")
+        
+        # Criar novo usuário (apenas na página de login)
+        with st.expander("👥 Criar Novo Usuário"):
+            with st.form("create_user_form"):
+                st.subheader("Novo Usuário")
+                new_username = st.text_input("Novo Usuário", placeholder="Digite o nome de usuário")
+                new_password = st.text_input("Nova Senha", type="password", placeholder="Digite a senha")
+                confirm_password = st.text_input("Confirmar Senha", type="password", placeholder="Confirme a senha")
+                
+                create_submitted = st.form_submit_button("👤 Criar Usuário", use_container_width=True)
+                
+                if create_submitted:
+                    if new_username and new_password and confirm_password:
+                        if new_password == confirm_password:
+                            if create_user(new_username, new_password):
+                                st.success(f"✅ Usuário '{new_username}' criado com sucesso!")
+                            else:
+                                st.error("❌ Erro ao criar usuário. Nome de usuário já existe.")
+                        else:
+                            st.error("❌ As senhas não coincidem!")
+                    else:
+                        st.warning("⚠️ Preencha todos os campos!")
+        
+        #st.info("""
+        #**Credenciais padrão:**
+        #- **Usuário:** admin
+        #- **Senha:** admin123
+        #""")
+    
+    st.stop()
+
+# Aplicação principal (apenas para usuários logados)
+# Sidebar com logo e informações do usuário
 with st.sidebar:
     # Tenta carregar a imagem do logo
     logo_carregado = carregar_imagem_logo("Logo_Loja.png")
@@ -381,6 +593,65 @@ with st.sidebar:
         st.sidebar.info("💡 Para usar seu logo, coloque o arquivo 'Logo_Loja.png' na mesma pasta do aplicativo")
     
     st.title("📒 Livro Caixa")
+    
+    # Informações do usuário logado
+    st.sidebar.markdown("---")
+    st.sidebar.success(f"👤 **Usuário:** {st.session_state.username}")
+    
+    # Botão de logout
+    if st.sidebar.button("🚪 Sair", use_container_width=True):
+        logout_user()
+        st.rerun()
+    
+    # Alterar senha
+    with st.sidebar.expander("🔑 Alterar Senha"):
+        with st.form("change_password_form"):
+            new_password = st.text_input("Nova Senha", type="password")
+            confirm_password = st.text_input("Confirmar Senha", type="password")
+            
+            if st.form_submit_button("💾 Alterar Senha"):
+                if new_password and confirm_password:
+                    if new_password == confirm_password:
+                        change_password(st.session_state.username, new_password)
+                        st.success("✅ Senha alterada com sucesso!")
+                    else:
+                        st.error("❌ As senhas não coincidem!")
+                else:
+                    st.warning("⚠️ Preencha todos os campos!")
+    
+    # Gerenciar usuários (apenas para admin)
+    if st.session_state.username == 'admin':
+        with st.sidebar.expander("👥 Gerenciar Usuários"):
+            st.subheader("Usuários do Sistema")
+            
+            # Listar usuários existentes
+            users = get_all_users()
+            if users:
+                st.write("**Usuários cadastrados:**")
+                for i, (username, created_at) in enumerate(users, 1):
+                    st.write(f"{i}. **{username}** - Criado em: {created_at[:10]}")
+                
+                st.markdown("---")
+                
+                # Excluir usuário
+                st.subheader("Excluir Usuário")
+                user_to_delete = st.selectbox(
+                    "Selecione o usuário para excluir:",
+                    [user[0] for user in users if user[0] != 'admin']
+                )
+                
+                if user_to_delete:
+                    if st.button("🗑️ Excluir Usuário", use_container_width=True):
+                        if st.checkbox("✅ Confirmar exclusão do usuário"):
+                            success, message = delete_user(user_to_delete)
+                            if success:
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
+            else:
+                st.info("Nenhum usuário cadastrado.")
+    
     st.markdown("---")
     
     pagina = st.radio(
@@ -403,6 +674,8 @@ if pagina == "Ajuda":
         de forma simples e organizada.
         
         **✨ Funcionalidades:**
+        - ✅ **Acesso Protegido**: Sistema de login seguro
+        - ✅ **Gerenciamento de Usuários**: Crie e gerencie múltiplos usuários
         - ✅ **Banco de Dados SQLite**: Dados salvos localmente
         - ✅ **Contas Personalizáveis**: Adicione suas próprias contas
         - ✅ **Edição de Lançamentos**: Edite ou exclua lançamentos existentes
@@ -432,7 +705,24 @@ if pagina == "Ajuda":
         - **Retirada do banco** → **Entrada** do caixa
         - **Pagamento** → **Saída** do caixa
         - **Recebimento** → **Entrada** do caixa
+        
+        **🔐 Segurança:**
+        - Altere a senha padrão do admin
+        - Crie usuários individuais para cada pessoa
+        - Mantenha suas credenciais seguras
+        - Faça logout ao terminar
         """)
+        
+        # Informações sobre gerenciamento de usuários
+        if st.session_state.username == 'admin':
+            st.subheader("👥 Admin")
+            st.markdown("""
+            **Privilégios de administrador:**
+            - Criar novos usuários
+            - Excluir usuários
+            - Ver todos os usuários
+            - Gerenciar todo o sistema
+            """)
 
 # Página: Contas (SIMPLIFICADA)
 elif pagina == "Contas":
@@ -559,6 +849,18 @@ elif pagina == "Lançamentos":
             
             # Exibir tabela responsiva
             st.dataframe(df_exibir_display, use_container_width=True, hide_index=True)
+            
+            # Download CSV individual do mês
+            st.subheader("📥 Download do Mês")
+            csv_data = download_csv_mes(mes_selecionado)
+            if csv_data:
+                st.download_button(
+                    label=f"💾 Baixar {mes_selecionado} em CSV",
+                    data=csv_data,
+                    file_name=f"livro_caixa_{mes_selecionado}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
             
             # Seção de Edição de Lançamentos
             st.subheader("✏️ Gerenciar Lançamentos")
@@ -739,15 +1041,38 @@ elif pagina == "Exportar Dados":
         
         st.info("💡 Os arquivos CSV podem ser abertos diretamente no Excel")
         
+        # Download de CSV individual por mês
+        st.subheader("📥 Download por Mês")
+        meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        
+        mes_download = st.selectbox("**Selecione o mês para download:**", meses)
+        csv_data = download_csv_mes(mes_download)
+        
+        if csv_data:
+            st.download_button(
+                label=f"💾 Baixar {mes_download} em CSV",
+                data=csv_data,
+                file_name=f"livro_caixa_{mes_download}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.warning(f"📭 Nenhum dado encontrado para {mes_download}")
+        
+        st.markdown("---")
+        
+        # Exportação completa
+        st.subheader("📦 Exportação Completa")
         if st.button("📦 Exportar Todos os Dados", use_container_width=True):
             with st.spinner("Gerando arquivo ZIP..."):
                 output = exportar_para_csv()
                 
                 if output is not None:
                     st.download_button(
-                        label="💾 Baixar Arquivo ZIP",
+                        label="💾 Baixar Arquivo ZIP Completo",
                         data=output,
-                        file_name=f"livro_caixa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        file_name=f"livro_caixa_completo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                         mime="application/zip",
                         use_container_width=True
                     )
@@ -782,6 +1107,8 @@ elif pagina == "Exportar Dados":
         - **Arquivo:** `livro_caixa.db`
         - **Dados:** Persistidos localmente
         - **Exportação:** CSV compatível com Excel
+        - **Segurança:** Acesso por login
+        - **Usuários:** Múltiplos usuários suportados
         """)
 
 # Rodapé
@@ -791,9 +1118,9 @@ st.markdown(
     <div style='text-align: center; color: #666; font-size: 0.9rem;'>
         <strong>CONSTITUCIONALISTAS-929</strong> - Livro Caixa | 
         Desenvolvido por Silmar Tolotto | 
+        Usuário: {username} | 
         {date}
     </div>
-    """.format(date=datetime.now().strftime('%d/%m/%Y %H:%M')),
+    """.format(username=st.session_state.username, date=datetime.now().strftime('%d/%m/%Y %H:%M')),
     unsafe_allow_html=True
 )
-
