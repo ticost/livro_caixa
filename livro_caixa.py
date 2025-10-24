@@ -811,14 +811,14 @@ elif pagina == "Contas":
     contas = get_contas()
     
     # Lista de contas existentes
-    st.subheader("📋 Contas Cadastradas")
-    if contas:
-        for i, conta in enumerate(contas, 1):
-            st.write(f"{i}. {conta}")
-    else:
-        st.info("📭 Nenhuma conta cadastrada ainda.")
+    #st.subheader("📋 Contas Cadastradas")
+    #if contas:
+        #for i, conta in enumerate(contas, 1):
+            #st.write(f"{i}. {conta}")
+   # else:
+       # st.info("📭 Nenhuma conta cadastrada ainda.")
     
-    st.markdown("---")
+    #st.markdown("---")
     
     # Apenas usuários com permissão de edição podem adicionar contas
     if user_can_edit():
@@ -1214,3 +1214,4 @@ st.markdown(
     """.format(username=st.session_state.username, date=datetime.now().strftime('%d/%m/%Y %H:%M')),
     unsafe_allow_html=True
 )
+
